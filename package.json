@@ -1,0 +1,83 @@
+{
+  "name": "@mincrypt/vyrion",
+  "version": "0.1.0",
+  "description": "Vyrion — One intelligent runtime for every LLM. Unified API, smart routing, auto failover, streaming, analytics, and cost monitoring across OpenAI, Groq, Gemini, Anthropic, Mistral, Together AI, Ollama and custom providers.",
+  "author": "Mincr Technology <hello@mincr.in> (https://mincr.in)",
+  "license": "MIT",
+  "keywords": [
+    "vyrion",
+    "mincr",
+    "llm",
+    "ai",
+    "openai",
+    "groq",
+    "gemini",
+    "anthropic",
+    "mistral",
+    "ollama",
+    "llm-router",
+    "ai-gateway",
+    "ai-routing",
+    "unified-ai",
+    "ai-sdk",
+    "streaming",
+    "typescript",
+    "mincr-technology"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "build:watch": "tsup --watch",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src --ext .ts",
+    "prepublishOnly": "npm run type-check && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.1.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.21.0",
+    "@google/genai": ">=1.0.0",
+    "@mistralai/mistralai": ">=1.0.0",
+    "groq-sdk": ">=0.3.0",
+    "openai": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": { "optional": true },
+    "groq-sdk": { "optional": true },
+    "@google/genai": { "optional": true },
+    "@anthropic-ai/sdk": { "optional": true },
+    "@mistralai/mistralai": { "optional": true }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mincrypt/vyrion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mincrypt/vyrion/issues"
+  },
+  "homepage": "https://mincr.in/vyrion"
+}

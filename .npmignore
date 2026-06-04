@@ -1,0 +1,9 @@
+src/
+node_modules/
+coverage/
+*.test.ts
+tsconfig.json
+tsup.config.ts
+.eslintrc*
+.env*
+examples/
