@@ -7,10 +7,13 @@ import type { ChatRequest, ChatResponse, StreamChunk, HealthCheckResult, TokenUs
 
 export class GeminiProvider extends BaseProvider {
   readonly name = "gemini";
-  readonly defaultModel = "gemini-2.0-flash";
+  readonly defaultModel = "gemini-2.5-flash";
   readonly supportedModels = [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
     "gemini-2.5-pro-preview-06-05",
     "gemini-2.5-flash-preview-05-20",
+    "gemini-2.0-pro-exp-02-05",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
     "gemini-1.5-pro",
@@ -94,7 +97,8 @@ export class GeminiProvider extends BaseProvider {
     const start = Date.now();
     try {
       const client = await this.getClient();
-      await client.models.get({ model: "gemini-2.0-flash" });
+      const modelToCheck = this.config.defaultModel || this.defaultModel;
+      await client.models.get({ model: modelToCheck });
       return {
         provider: this.name,
         status: "up",

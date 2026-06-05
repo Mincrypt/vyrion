@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-06-05
+
+### Fixed
+- **Gemini & Anthropic Health Checks**: Fixed a bug where health check model queries were hardcoded, preventing users with overridden/custom default models from passing the health probe. Model selection is now dynamically selected based on configuration.
+- **Gemini Default Model**: Changed the default model to `gemini-2.5-flash` to offer improved rate limits and stabler out-of-the-box performance.
+
+### Added
+- **Pricing Updates**: Added cost metrics for `gemini-2.5-flash` and `gemini-2.5-pro` in the cost tracker.
+
 ## [0.1.1] - 2026-06-05
 
 ### Added

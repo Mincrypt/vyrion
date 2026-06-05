@@ -102,9 +102,10 @@ export class AnthropicProvider extends BaseProvider {
     const start = Date.now();
     try {
       const client = await this.getClient();
+      const modelToCheck = this.config.defaultModel || this.defaultModel;
       // Minimal 1-token request to validate key
       await client.messages.create({
-        model: this.defaultModel,
+        model: modelToCheck,
         max_tokens: 1,
         messages: [{ role: "user", content: "hi" }],
       });

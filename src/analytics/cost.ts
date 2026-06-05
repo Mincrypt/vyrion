@@ -30,6 +30,8 @@ const PRICING: PricingTable = {
     "gemma2-9b-it": { inputPer1M: 0.20, outputPer1M: 0.20 },
   },
   gemini: {
+    "gemini-2.5-pro": { inputPer1M: 1.25, outputPer1M: 5.00 },
+    "gemini-2.5-flash": { inputPer1M: 0.075, outputPer1M: 0.30 },
     "gemini-2.5-pro-preview-06-05": { inputPer1M: 1.25, outputPer1M: 10.00 },
     "gemini-2.5-flash-preview-05-20": { inputPer1M: 0.15, outputPer1M: 0.60 },
     "gemini-2.0-flash": { inputPer1M: 0.10, outputPer1M: 0.40 },

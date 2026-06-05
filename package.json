@@ -1,6 +1,6 @@
 {
   "name": "@mincrypt/vyrion",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Vyrion — One intelligent runtime for every LLM. Unified API, smart routing, auto failover, streaming, analytics, and cost monitoring across OpenAI, Groq, Gemini, Anthropic, Mistral, Together AI, Ollama and custom providers.",
   "author": "Mincr Technology <hello@mincr.in> (https://mincr.in)",
   "license": "MIT",
