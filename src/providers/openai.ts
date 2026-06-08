@@ -1,5 +1,5 @@
 import { BaseProvider } from "./base.js";
-import type { ChatRequest, ChatResponse, StreamChunk, HealthCheckResult, TokenUsage } from "../types/index.js";
+import type { ChatRequest, ChatResponse, StreamChunk, HealthCheckResult, TokenUsage, MessageContentPart } from "../types/index.js";
 
 // ─────────────────────────────────────────────────────────────
 //  OpenAI Provider Adapter
