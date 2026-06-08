@@ -42,11 +42,31 @@ export class MistralProvider extends BaseProvider {
     const messages = this.buildMessages(req);
     const start = Date.now();
 
+    const tools = req.tools?.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    let responseFormat: any;
+    if (req.responseFormat) {
+      if (req.responseFormat === "json" || req.responseFormat.type === "json_object") {
+        responseFormat = { type: "json_object" };
+      } else if (req.responseFormat.type === "json_schema") {
+        responseFormat = { type: "json_object" };
+      }
+    }
+
     const response = await client.chat.complete({
       model,
       messages,
       maxTokens: req.maxTokens,
       temperature: req.temperature,
+      tools: tools && tools.length > 0 ? tools : undefined,
+      responseFormat,
     });
 
     const latency = Date.now() - start;
@@ -60,6 +80,25 @@ export class MistralProvider extends BaseProvider {
       total: response.usage?.totalTokens ?? 0,
     };
 
+    const mCalls = choice?.message?.toolCalls || choice?.message?.tool_calls || [];
+    const toolCalls = mCalls.length > 0 ? mCalls.map((tc: any) => ({
+      id: tc.id,
+      type: "function" as const,
+      function: {
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      },
+    })) : undefined;
+
+    let json: Record<string, any> | undefined;
+    if (req.responseFormat && content) {
+      try {
+        json = JSON.parse(content);
+      } catch {
+        // Ignore json parse error
+      }
+    }
+
     return {
       content,
       provider: this.name,
@@ -68,6 +107,8 @@ export class MistralProvider extends BaseProvider {
       latency,
       cost: 0,
       finishReason: choice?.finishReason ?? "stop",
+      toolCalls,
+      json,
     };
   }
 

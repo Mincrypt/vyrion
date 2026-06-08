@@ -3,10 +3,23 @@
 //  https://mincr.in/vyrion
 // ─────────────────────────────────────────────────────────────
 
+export interface MessageContentPart {
+  type: "text" | "image" | "file";
+  text?: string;
+  image?: {
+    url: string;
+    mimeType?: string;
+  };
+  file?: {
+    url: string;
+    mimeType: string;
+  };
+}
+
 /** A single message in a multi-turn conversation */
 export interface Message {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | MessageContentPart[];
 }
 
 /** Token usage breakdown returned in every response */
@@ -16,8 +29,46 @@ export interface TokenUsage {
   total: number;
 }
 
+export interface ICache {
+  get(key: string): Promise<ChatResponse | null> | ChatResponse | null;
+  set(key: string, value: ChatResponse, ttl?: number): Promise<void> | void;
+  delete?(key: string): Promise<void> | void;
+  clear?(): Promise<void> | void;
+}
+
+export interface MiddlewareContext {
+  request: ChatRequest;
+}
+
+export type MiddlewareNext = () => Promise<ChatResponse>;
+
+export type Middleware = (
+  ctx: MiddlewareContext,
+  next: MiddlewareNext
+) => Promise<ChatResponse>;
+
+export interface ToolDefinition {
+  name: string;
+  description?: string;
+  parameters?: Record<string, any>;
+}
+
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface ResponseFormat {
+  type: "text" | "json_object" | "json_schema";
+  schema?: Record<string, any>;
+}
+
 /** Routing goal / strategy */
-export type RoutingGoal = "auto" | "fastest" | "cheapest" | "best";
+export type RoutingGoal = "auto" | "fastest" | "cheapest" | "best" | ((providers: any[], analytics: any) => any);
 
 /**
  * Request object passed to ai.chat() / ai.stream()
@@ -45,6 +96,12 @@ export interface ChatRequest {
   stream?: boolean;
   /** Abort signal for cancellation */
   signal?: AbortSignal;
+  /** Custom request-level cache setting (true to enable, false to disable) */
+  cache?: boolean;
+  /** List of tools available to the model */
+  tools?: ToolDefinition[];
+  /** Expected response format (e.g. JSON object or schema) */
+  responseFormat?: "json" | ResponseFormat;
 }
 
 /**
@@ -65,6 +122,10 @@ export interface ChatResponse {
   cost: number;
   /** Finish reason (stop | length | content_filter | ...) */
   finishReason: string;
+  /** Parsed tool calls requested by the model */
+  toolCalls?: ToolCall[];
+  /** Parsed JSON response if JSON formatting was requested and successful */
+  json?: Record<string, any>;
 }
 
 /**
@@ -119,7 +180,18 @@ export interface VyrionConfig {
   fallback?: string[];
   /** Default routing goal */
   defaultGoal?: RoutingGoal;
+  /** Caching configuration (boolean to use in-memory cache or a custom ICache instance) */
+  cache?: boolean | ICache;
+  /** Global middleware array to intercept requests/responses */
+  middleware?: Middleware[];
+  /** Circuit Breaker and cooldown configurations */
+  circuitBreaker?: CircuitBreakerConfig;
   [key: string]: unknown;
+}
+
+export interface CircuitBreakerConfig {
+  failuresThreshold?: number;
+  cooldownMs?: number;
 }
 
 /** Provider health status */

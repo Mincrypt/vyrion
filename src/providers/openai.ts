@@ -40,14 +40,46 @@ export class OpenAIProvider extends BaseProvider {
   async chat(req: ChatRequest): Promise<ChatResponse> {
     const client = await this.getClient();
     const model = this.resolveModel(req);
-    const messages = this.buildMessages(req);
+    const messages = this.buildMessages(req).map((m) => ({
+      role: m.role,
+      content: mapOpenAIMessageContent(m.content),
+    }));
     const start = Date.now();
+
+    const tools = req.tools?.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    let response_format: any;
+    if (req.responseFormat) {
+      if (req.responseFormat === "json") {
+        response_format = { type: "json_object" };
+      } else if (req.responseFormat.type === "json_object") {
+        response_format = { type: "json_object" };
+      } else if (req.responseFormat.type === "json_schema") {
+        response_format = {
+          type: "json_schema",
+          json_schema: {
+            name: "response_schema",
+            schema: req.responseFormat.schema,
+            strict: true,
+          },
+        };
+      }
+    }
 
     const completion = await client.chat.completions.create({
       model,
       messages,
       max_tokens: req.maxTokens,
       temperature: req.temperature,
+      tools: tools && tools.length > 0 ? tools : undefined,
+      response_format,
     });
 
     const latency = Date.now() - start;
@@ -58,6 +90,24 @@ export class OpenAIProvider extends BaseProvider {
       total: completion.usage?.total_tokens ?? 0,
     };
 
+    const toolCalls = choice?.message?.tool_calls?.map((tc: any) => ({
+      id: tc.id,
+      type: "function" as const,
+      function: {
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      },
+    }));
+
+    let json: Record<string, any> | undefined;
+    if (req.responseFormat && choice?.message?.content) {
+      try {
+        json = JSON.parse(choice.message.content);
+      } catch {
+        // Ignore json parse error
+      }
+    }
+
     return {
       content: choice?.message?.content ?? "",
       provider: this.name,
@@ -66,13 +116,18 @@ export class OpenAIProvider extends BaseProvider {
       latency,
       cost: 0, // filled by cost module
       finishReason: choice?.finish_reason ?? "stop",
+      toolCalls,
+      json,
     };
   }
 
   async *stream(req: ChatRequest): AsyncGenerator<StreamChunk> {
     const client = await this.getClient();
     const model = this.resolveModel(req);
-    const messages = this.buildMessages(req);
+    const messages = this.buildMessages(req).map((m) => ({
+      role: m.role,
+      content: mapOpenAIMessageContent(m.content),
+    }));
 
     const stream = await client.chat.completions.create({
       model,
@@ -104,4 +159,44 @@ export class OpenAIProvider extends BaseProvider {
       return this.failedHealth(err);
     }
   }
+}
+
+// ── Helpers ─────────────────────────────────────────────
+
+function mapOpenAIMessageContent(content: string | MessageContentPart[]): any {
+  if (typeof content === "string") return content;
+  return content.map((part) => {
+    if (part.type === "text") {
+      return { type: "text", text: part.text ?? "" };
+    }
+    if (part.type === "image") {
+      return {
+        type: "image_url",
+        image_url: {
+          url: part.image?.url ?? "",
+        },
+      };
+    }
+    if (part.type === "file") {
+      const mime = part.file?.mimeType ?? "";
+      if (mime.startsWith("text/") || mime === "application/json" || mime === "text/csv") {
+        let textVal = part.file?.url ?? "";
+        if (textVal.includes(";base64,")) {
+          const base64Data = textVal.split(";base64,")[1];
+          if (base64Data) {
+            textVal = Buffer.from(base64Data, "base64").toString("utf8");
+          }
+        } else if (!textVal.startsWith("http")) {
+          try {
+            textVal = Buffer.from(textVal, "base64").toString("utf8");
+          } catch {
+            // fallback
+          }
+        }
+        return { type: "text", text: textVal };
+      }
+      throw new Error(`OpenAI does not natively support "${mime}" file attachments. Please use Gemini or Anthropic instead.`);
+    }
+    return part;
+  });
 }

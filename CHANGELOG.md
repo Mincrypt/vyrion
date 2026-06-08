@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-08
+
+### Added
+- **Multi-Modal Support**: Unified support for sending images, PDFs, text, and document files. Automatically mapped natively to Gemini and Anthropic, with OpenAI mapping images and text-based attachments while raising clean errors for binary files.
+- **Circuit Breaker & Automatic Cooldown**: Tracks provider health dynamically, tripping on consecutive failures or HTTP 429 rate limit responses. Bypasses cooling-down providers or demotes them during fallback routing.
+- **Streaming Caching & Playback**: Implements caching for streaming responses. Plays back cached chunks sequentially with a simulated `15ms` delay to preserve smooth user experience on cache hits.
+
 ## [0.1.2] - 2026-06-05
 
 ### Fixed

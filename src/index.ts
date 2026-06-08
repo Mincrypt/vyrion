@@ -22,6 +22,10 @@ import { estimateCost, getPricing, setPricing } from "./analytics/cost.js";
 import { PluginRegistry } from "./plugins/registry.js";
 import type { ProviderPlugin } from "./plugins/registry.js";
 
+import { compose } from "./middleware/compose.js";
+import { InMemoryCache, createCacheMiddleware, generateCacheKey } from "./cache/index.js";
+import { CircuitBreakerManager } from "./router/circuit.js";
+
 import type {
   VyrionConfig,
   ChatRequest,
@@ -31,6 +35,14 @@ import type {
   HealthCheckResult,
   ProviderConfig,
   ModelPricing,
+  ICache,
+  MiddlewareContext,
+  Middleware,
+  ToolDefinition,
+  ToolCall,
+  ResponseFormat,
+  MessageContentPart,
+  CircuitBreakerConfig,
 } from "./types/index.js";
 
 // ─────────────────────────────────────────────────────────────
@@ -50,6 +62,15 @@ export type {
   RoutingGoal,
   ProviderStats,
   HealthStatus,
+  ICache,
+  MiddlewareContext,
+  MiddlewareNext,
+  Middleware,
+  ToolDefinition,
+  ToolCall,
+  ResponseFormat,
+  MessageContentPart,
+  CircuitBreakerConfig,
 } from "./types/index.js";
 export type { ProviderPlugin } from "./plugins/registry.js";
 
@@ -78,12 +99,33 @@ export class Vyrion {
   private readonly health: HealthMonitor;
   private readonly plugins: PluginRegistry;
   private readonly config: VyrionConfig;
+  private readonly middlewares: Middleware[] = [];
+  private readonly circuitBreaker?: CircuitBreakerManager;
+  private readonly cache?: ICache;
 
   constructor(config: VyrionConfig = {}) {
     this.config = config;
     this.analytics = new AnalyticsTracker();
     this.health = new HealthMonitor();
     this.plugins = new PluginRegistry();
+
+    // Register user-defined middlewares if any
+    if (Array.isArray(config.middleware)) {
+      this.middlewares.push(...config.middleware);
+    }
+
+    // Register cache middleware if configured
+    if (config.cache) {
+      const cacheInstance = typeof config.cache === "boolean"
+        ? new InMemoryCache()
+        : config.cache;
+      this.cache = cacheInstance;
+      this.middlewares.push(createCacheMiddleware(cacheInstance));
+    }
+
+    if (config.circuitBreaker) {
+      this.circuitBreaker = new CircuitBreakerManager(config.circuitBreaker);
+    }
 
     const timeout = config.timeout;
 
@@ -129,7 +171,17 @@ export class Vyrion {
     }
 
     this.providers = new Map(configured);
-    this.router = new FallbackRouter(this.providers, this.analytics);
+    this.router = new FallbackRouter(this.providers, this.analytics, this.circuitBreaker);
+  }
+
+  /**
+   * Register a custom middleware function.
+   */
+  use(fn: Middleware): void {
+    if (typeof fn !== "function") {
+      throw new TypeError("Middleware must be a function!");
+    }
+    this.middlewares.push(fn);
   }
 
 
@@ -144,24 +196,61 @@ export class Vyrion {
    */
   async chat(req: ChatRequest): Promise<ChatResponse> {
     const mergedReq = this.applyDefaults(req);
-    const response = await this.router.chat(mergedReq);
-    // Backfill cost if not already set by the provider
-    if (response.cost === 0) {
-      response.cost = estimateCost(response.provider, response.model, response.usage);
+
+    const coreExecutor = async () => {
+      const response = await this.router.chat(context.request);
+      // Backfill cost if not already set by the provider
+      if (response.cost === 0) {
+        response.cost = estimateCost(response.provider, response.model, response.usage);
+      }
+      return response;
+    };
+
+    const context: MiddlewareContext = { request: mergedReq };
+
+    if (this.middlewares.length === 0) {
+      return coreExecutor();
     }
-    return response;
+
+    const runner = compose(this.middlewares);
+    return runner(context, coreExecutor);
   }
 
-  /**
-   * Stream a chat response as an async generator of chunks.
-   *
-   * @example
-   * for await (const chunk of ai.stream({ message: "Tell me a story" })) {
-   *   process.stdout.write(chunk.delta);
-   * }
-   */
-  stream(req: ChatRequest): AsyncGenerator<StreamChunk> {
-    return this.router.stream(this.applyDefaults(req));
+  async *stream(req: ChatRequest): AsyncGenerator<StreamChunk> {
+    const mergedReq = this.applyDefaults(req);
+    const cacheEnabled = this.cache && mergedReq.cache !== false;
+
+    if (cacheEnabled) {
+      const key = "stream:" + generateCacheKey(mergedReq);
+      try {
+        const cached = await this.cache!.get(key);
+        if (cached && Array.isArray(cached)) {
+          for (const chunk of cached) {
+            yield chunk;
+            await new Promise((resolve) => setTimeout(resolve, 15));
+          }
+          return;
+        }
+      } catch (err) {
+        console.warn("Vyrion stream cache read error:", err);
+      }
+
+      // Cache miss: stream and collect
+      const chunks: StreamChunk[] = [];
+      try {
+        for await (const chunk of this.router.stream(mergedReq)) {
+          chunks.push(chunk);
+          yield chunk;
+        }
+        await this.cache!.set(key, chunks as any);
+      } catch (err) {
+        throw err;
+      }
+    } else {
+      for await (const chunk of this.router.stream(mergedReq)) {
+        yield chunk;
+      }
+    }
   }
 
   // ── Provider Management ───────────────────────────────────
@@ -297,6 +386,7 @@ export { estimateCost, getPricing, setPricing };
 export { AnalyticsTracker } from "./analytics/tracker.js";
 export { HealthMonitor } from "./analytics/health.js";
 export { PluginRegistry } from "./plugins/registry.js";
+export { InMemoryCache, generateCacheKey } from "./cache/index.js";
 
 /** Default export: Vyrion class */
 export default Vyrion;

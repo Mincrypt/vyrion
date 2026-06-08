@@ -2,6 +2,7 @@ import type { IProvider } from "../providers/base.js";
 import type { ChatRequest, ChatResponse, StreamChunk } from "../types/index.js";
 import type { AnalyticsTracker } from "../analytics/tracker.js";
 import { resolveStrategy } from "./strategies.js";
+import { CircuitBreakerManager } from "./circuit.js";
 
 // ─────────────────────────────────────────────────────────────
 //  Fallback Router
@@ -23,7 +24,8 @@ const DEFAULT_FALLBACK: readonly string[] = [
 export class FallbackRouter {
   constructor(
     private readonly providers: Map<string, IProvider>,
-    private readonly analytics: AnalyticsTracker
+    private readonly analytics: AnalyticsTracker,
+    private readonly circuit?: CircuitBreakerManager
   ) {}
 
   // ── Public API ───────────────────────────────────────────
@@ -43,6 +45,7 @@ export class FallbackRouter {
           cost: response.cost,
           success: true,
         });
+        this.circuit?.recordSuccess(provider.name);
         return response;
       } catch (err) {
         lastError = err;
@@ -53,6 +56,7 @@ export class FallbackRouter {
           cost: 0,
           success: false,
         });
+        this.circuit?.recordFailure(provider.name, err);
         // Try the next provider in the chain
       }
     }
@@ -83,6 +87,7 @@ export class FallbackRouter {
           cost: 0,
           success: true,
         });
+        this.circuit?.recordSuccess(provider.name);
         return;
       } catch (err) {
         lastError = err;
@@ -93,6 +98,7 @@ export class FallbackRouter {
           cost: 0,
           success: false,
         });
+        this.circuit?.recordFailure(provider.name, err);
       }
     }
 
@@ -112,13 +118,22 @@ export class FallbackRouter {
    * 3. If req.fallback is specified → use that chain instead of default.
    */
   private buildChain(req: ChatRequest): IProvider[] {
-    const available = this.getAvailable();
+    const allAvailable = this.getAvailable();
 
-    if (available.length === 0) {
+    if (allAvailable.length === 0) {
       throw new Error(
         "No active providers found. Please configure at least one provider API key.\n" +
         "See: https://mincr.in/vyrion#quick-start"
       );
+    }
+
+    // Filter available using circuit breaker
+    let available = allAvailable;
+    if (this.circuit) {
+      const active = allAvailable.filter((p) => this.circuit!.isAvailable(p.name));
+      if (active.length > 0) {
+        available = active;
+      }
     }
 
     // Explicit single provider requested
@@ -132,26 +147,48 @@ export class FallbackRouter {
       }
       if (!primary.isAvailable()) throw new Error(`Provider "${req.provider}" is not configured.`);
 
-      // Build fallback excluding the primary
+      // Build fallback excluding the primary, filtering degraded ones if possible
       const fallbackNames = req.fallback ?? [...DEFAULT_FALLBACK];
       const rest = fallbackNames
         .filter((n) => n !== req.provider)
         .map((n) => this.providers.get(n))
         .filter((p): p is IProvider => p !== undefined && p.isAvailable());
 
-      return [primary, ...rest];
+      let activeRest = rest;
+      let cooldownRest: IProvider[] = [];
+
+      if (this.circuit) {
+        activeRest = rest.filter((p) => this.circuit!.isAvailable(p.name));
+        cooldownRest = rest.filter((p) => !this.circuit!.isAvailable(p.name));
+      }
+
+      if (this.circuit && !this.circuit.isAvailable(primary.name)) {
+        if (activeRest.length > 0) {
+          // Primary is on cooldown but we have active fallbacks: demote primary
+          return [...activeRest, primary, ...cooldownRest];
+        }
+      }
+
+      return [primary, ...activeRest, ...cooldownRest];
     }
 
     // Auto-routing: pick via strategy first, then arrange remaining as fallback
     const goal = req.goal ?? "auto";
-    const strategy = resolveStrategy(goal);
+    const strategy = typeof goal === "function" ? (goal as any) : resolveStrategy(goal);
     const primary = strategy(available, this.analytics);
 
     const fallbackNames = req.fallback ?? [...DEFAULT_FALLBACK];
-    const rest = fallbackNames
+    let rest = fallbackNames
       .filter((n) => n !== primary.name)
       .map((n) => this.providers.get(n))
       .filter((p): p is IProvider => p !== undefined && p.isAvailable());
+
+    if (this.circuit) {
+      const activeRest = rest.filter((p) => this.circuit!.isAvailable(p.name));
+      if (activeRest.length > 0) {
+        rest = activeRest;
+      }
+    }
 
     // Remaining available providers not already in chain
     const inChain = new Set([primary.name, ...rest.map((p) => p.name)]);

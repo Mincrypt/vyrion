@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://mincr.in/vyrion/banner.svg" alt="Vyrion" width="720" />
+  <img src="https://mincr.in/vyrion/banner.png" alt="Vyrion" width="720" />
 </p>
 
 <h1 align="center">Vyrion</h1>
@@ -57,6 +57,8 @@ console.log(`[${res.provider} / ${res.model}] ${res.latency}ms · $${res.cost}`)
 | **Health Checks** | Per-provider status monitoring |
 | **Local Models** | Ollama support with zero API key required |
 | **Plugin System** | Register fully custom providers |
+| **Middleware** | Onion-style interceptors to monitor/modify request/response pipeline |
+| **Custom Caching** | Extensible cache engine with built-in memory store and Redis/Custom support |
 | **TypeScript** | Full type safety, dual ESM/CJS build |
 
 ---
@@ -156,6 +158,12 @@ const ai = new Vyrion({
   timeout: 30_000,           // default timeout for all providers
   defaultGoal: "fastest",    // default routing strategy
   fallback: ["openai", "groq", "gemini"], // custom fallback order
+  cache: true,               // enable built-in memory cache (or custom ICache)
+  middleware: [],            // array of global middlewares
+  circuitBreaker: {          // customize automatic cooldowns
+    failuresThreshold: 2,
+    cooldownMs: 30_000,
+  }
 });
 ```
 
@@ -168,6 +176,69 @@ const ai = new Vyrion({
 >   const ai = new Vyrion({ openai: process.env.OPENAI_API_KEY });
 >   const ai = new Vyrion({ groq: process.env.GROQ_API_KEY });
 > ```
+
+### Global Configuration (`VyrionConfig`)
+
+Passed to `new Vyrion(config)`:
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `openai` | `string \| ProviderConfig` | `undefined` | OpenAI API Key or full provider configuration. |
+| `groq` | `string \| ProviderConfig` | `undefined` | Groq API Key or full provider configuration. |
+| `gemini` | `string \| ProviderConfig` | `undefined` | Google Gemini API Key or full provider configuration. |
+| `anthropic` | `string \| ProviderConfig` | `undefined` | Anthropic Claude API Key or full provider configuration. |
+| `mistral` | `string \| ProviderConfig` | `undefined` | Mistral API Key or full provider configuration. |
+| `together` | `string \| ProviderConfig` | `undefined` | Together AI API Key or full provider configuration. |
+| `ollama` | `string \| ProviderConfig` | `undefined` | Ollama local configuration (no API key required). |
+| `timeout` | `number` | `30000` | Global request timeout in milliseconds (can be overridden per-provider). |
+| `fallback` | `string[]` | *(standard priority list)* | Priority list of fallback providers when checking auto routing failovers. |
+| `defaultGoal` | `RoutingGoal` | `"auto"` | Default routing strategy if target provider is `"auto"`. |
+| `cache` | `boolean \| ICache` | `false` | Enables default memory cache or registers a custom cache backend. |
+| `middleware` | `Middleware[]` | `[]` | Array of global Onion-style middleware interceptor functions. |
+| `circuitBreaker` | `CircuitBreakerConfig` | `undefined` | Settings for automatic rate limiting failovers and cooldowns. |
+
+### Provider Configuration (`ProviderConfig`)
+
+Can be passed to configure specific providers (e.g. `gemini: { ... }`):
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `apiKey` | `string` | `undefined` | Provider API authentication key. |
+| `baseUrl` | `string` | `undefined` | Overrides base API url. Useful for proxies, local mock testing, or server setups. |
+| `timeout` | `number` | `30000` | Specific API request timeout in milliseconds for this provider. |
+| `defaultModel` | `string` | *(provider default)* | Overrides default provider model name used when none is specified. |
+
+### Circuit Breaker Configuration (`CircuitBreakerConfig`)
+
+Passed inside `config.circuitBreaker`:
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `failuresThreshold` | `number` | `3` | Number of sequential failed attempts before tripping the circuit. |
+| `cooldownMs` | `number` | `60000` | Time window (in milliseconds) the provider is bypassed before attempting recovery. |
+
+---
+
+## Request Configuration Reference (`ChatRequest`)
+
+Passed to `ai.chat(request)` and `ai.stream(request)`:
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `message` | `string` | `undefined` | Single prompt text message (shorthand helper). |
+| `messages` | `Message[]` | `[]` | Full multi-turn dialog history. Supports text/image/file multi-modal parts. |
+| `systemPrompt` | `string` | `undefined` | System instruction prompt to prepended to messages. |
+| `provider` | `string` | `"auto"` | Target provider name (e.g., `"openai"`) or `"auto"` to use routing strategy. |
+| `model` | `string` | *(varies)* | Specific model name to override provider default. |
+| `goal` | `RoutingGoal` | `"auto"` | Strategy for picking provider when `provider` is `"auto"`. |
+| `fallback` | `string[]` | *(global list)* | Override fallback list order for failed requests. |
+| `maxTokens` | `number` | `undefined` | Maximum token length for generated completion text. |
+| `temperature` | `number` | `undefined` | Sampling temperature between 0 and 2. |
+| `stream` | `boolean` | `false` | Set to `true` to return an async stream generator. |
+| `signal` | `AbortSignal` | `undefined` | Abort signal to cancel request/stream mid-way. |
+| `cache` | `boolean` | `true` | Set to `false` to force bypass caching on this request. |
+| `tools` | `ToolDefinition[]` | `[]` | Unified tool definitions available to the model. |
+| `responseFormat` | `"json" \| ResponseFormat` | `undefined` | Enforces structural output type (JSON schema). |
 
 ---
 
@@ -225,6 +296,24 @@ for await (const chunk of ai.stream({ message: "Tell me a story" })) {
 const res = await ai.chat({
   goal: "fastest",
   message: "Generate interview questions for Node.js",
+});
+```
+
+### Custom Routing Strategies
+
+You can also pass a custom function to the `goal` parameter (or `defaultGoal` in the constructor config) to control routing logic dynamically:
+
+```typescript
+const myCustomStrategy = (providers, analytics) => {
+  // Always use together AI if available, else fallback to the first provider
+  const target = providers.find((p) => p.name === "together");
+  return target ?? providers[0];
+};
+
+const res = await ai.chat({
+  message: "Hello",
+  provider: "auto",
+  goal: myCustomStrategy,
 });
 ```
 
@@ -336,6 +425,287 @@ ai.unregisterProvider("my-api");
 
 ---
 
+## Middleware (Interceptor) System
+
+Vyrion features an onion-style middleware engine (inspired by Koa-compose) that executes around the request lifecycle. Middlewares can be configured globally via the `Vyrion` constructor or registered dynamically using `.use()`.
+
+With middlewares, you can log requests, modify inputs, intercept responses, short-circuit execution, or catch provider errors.
+
+```typescript
+import Vyrion from "@mincrypt/vyrion";
+
+const ai = new Vyrion({ openai: "sk-..." });
+
+// 1. Logging Middleware
+ai.use(async (ctx, next) => {
+  console.log(`Starting request to provider: ${ctx.request.provider ?? 'auto'}`);
+  const start = Date.now();
+  const res = await next();
+  console.log(`Finished in ${Date.now() - start}ms`);
+  return res;
+});
+
+// 2. Modifying Request Middleware
+ai.use(async (ctx, next) => {
+  ctx.request.message = `[Prefix] ${ctx.request.message}`;
+  return next();
+});
+
+// 3. Short-circuiting Middleware (bypass providers)
+ai.use(async (ctx, next) => {
+  if (ctx.request.message?.includes("ping")) {
+    return {
+      content: "pong",
+      provider: "middleware-mock",
+      model: "mock-model",
+      usage: { prompt: 0, completion: 0, total: 0 },
+      latency: 0,
+      cost: 0,
+      finishReason: "stop",
+    };
+  }
+  return next();
+});
+```
+
+---
+
+## Customizable Caching System
+
+Vyrion comes with an extensible caching system for non-streaming (`chat()`) requests. It includes a built-in `InMemoryCache` and supports any custom cache store (like Redis, Memcached, or SQLite) that implements the simple `ICache` interface.
+
+### Using Built-in In-memory Cache
+
+```typescript
+import Vyrion from "@mincrypt/vyrion";
+
+const ai = new Vyrion({
+  openai: "sk-...",
+  cache: true, // Enables default InMemoryCache (expires in 5 minutes by default)
+});
+
+// The first request fetches from OpenAI and caches the result
+const res1 = await ai.chat({ message: "What is 2+2?" });
+
+// The second request resolves instantly from the cache
+const res2 = await ai.chat({ message: "What is 2+2?" });
+```
+
+### Bypassing Cache for a Request
+
+You can bypass the cache dynamically on a per-request basis:
+
+```typescript
+const res = await ai.chat({
+  message: "What is 2+2?",
+  cache: false, // Bypasses cache and hits the provider directly
+});
+```
+
+### Custom Cache Backend (e.g. Redis)
+
+To use your own caching backend, implement the `ICache` interface and pass it to the `cache` property:
+
+```typescript
+import Vyrion, { ICache } from "@mincrypt/vyrion";
+import { createClient } from "redis";
+
+const redisClient = createClient();
+await redisClient.connect();
+
+const redisCache: ICache = {
+  async get(key) {
+    const data = await redisClient.get(key);
+    return data ? JSON.parse(data) : null;
+  },
+  async set(key, value, ttl) {
+    // ttl is in seconds
+    if (ttl) {
+      await redisClient.set(key, JSON.stringify(value), { EX: ttl });
+    } else {
+      await redisClient.set(key, JSON.stringify(value));
+    }
+  },
+  async delete(key) {
+    await redisClient.del(key);
+  }
+};
+
+const ai = new Vyrion({
+  openai: "sk-...",
+  cache: redisCache, // Plug in your Redis cache
+});
+```
+
+---
+
+## Unified Tool Calling & Structured Outputs
+
+Vyrion provides a unified API for **Function Calling (Tools)** and **Structured Outputs** (JSON Schema / Object modes) across all major built-in providers (OpenAI, Gemini, Anthropic, Groq, Together, Mistral, Ollama). 
+
+For custom providers, tool definitions and schema parameters are safely forwarded inside the request, making implementation entirely optional and flexible.
+
+### 1. Tool Calling (Function Calling)
+
+You can pass standard tool definitions (JSON Schema format) in `ChatRequest.tools`. If the model decides to invoke a tool, Vyrion returns them in a normalized format:
+
+```typescript
+const res = await ai.chat({
+  message: "What's the weather in Paris?",
+  tools: [
+    {
+      name: "getWeather",
+      description: "Get the current weather for a location",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string" },
+          unit: { type: "string", enum: ["celsius", "fahrenheit"] }
+        },
+        required: ["location"]
+      }
+    }
+  ]
+});
+
+if (res.toolCalls) {
+  for (const call of res.toolCalls) {
+    console.log(`Model requested tool: ${call.function.name}`);
+    console.log(`Arguments: ${call.function.arguments}`);
+    // Output: Model requested tool: getWeather
+    // Output: Arguments: {"location":"Paris"}
+  }
+}
+```
+
+### 2. Structured JSON Output
+
+You can enforce the model to output a strict JSON object structure by specifying `responseFormat`:
+
+```typescript
+const res = await ai.chat({
+  message: "List 3 colors and their hex codes",
+  responseFormat: {
+    type: "json_schema",
+    schema: {
+      type: "object",
+      properties: {
+        colors: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              hex: { type: "string" }
+            },
+            required: ["name", "hex"]
+          }
+        }
+      },
+      required: ["colors"]
+    }
+  }
+});
+
+// Vyrion automatically parses the JSON response into the 'json' field
+console.log(res.json);
+// Output: { colors: [ { name: "red", hex: "#FF0000" }, ... ] }
+```
+
+---
+
+## Multi-Modal & Document Support (Images, PDFs & Documents)
+
+Vyrion supports multi-modal conversations where messages can accept an array of text, image, and file content parts. The package intelligently translates these inputs to each provider's native format:
+
+* **Google Gemini**: Natively translates images and document formats (PDFs, Word documents, text files, CSVs, etc.) directly using inline base64 data.
+* **Anthropic Claude**: Natively translates images and PDF documents to their respective block types, and decodes text-based attachments.
+* **OpenAI**: Natively translates images to `image_url` parts, decodes text files inline, and throws clear, descriptive errors for unsupported binary files (like PDFs).
+
+### Example: Multi-modal Message
+
+```typescript
+const res = await ai.chat({
+  messages: [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Summarize this PDF document and describe the image:" },
+        {
+          type: "file",
+          file: {
+            url: "data:application/pdf;base64,JVBERi0xLjQK...", // base64 representation of PDF
+            mimeType: "application/pdf"
+          }
+        },
+        {
+          type: "image",
+          image: {
+            url: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ...", // base64 representation of image
+            mimeType: "image/jpeg"
+          }
+        }
+      ]
+    }
+  ]
+});
+```
+
+---
+
+## Circuit Breaker & Automatic Cooldown
+
+Vyrion features a built-in **Circuit Breaker** to protect your application from rate-limiting (HTTP 429) or transient provider outages. When a provider encounters sequential errors exceeding your threshold (or throws an HTTP 429 rate limit error), the circuit breaker trips and marks the provider as degraded.
+
+During fallback routing, degraded providers are bypassed, and traffic is directed to alternate active providers for a configured cooldown duration.
+
+### Configuring Circuit Breaker
+
+```typescript
+import Vyrion from "@mincrypt/vyrion";
+
+const ai = new Vyrion({
+  openai: process.env.OPENAI_API_KEY,
+  groq: process.env.GROQ_API_KEY,
+  gemini: process.env.GEMINI_API_KEY,
+  
+  // Configure circuit breaker settings
+  circuitBreaker: {
+    failuresThreshold: 3,  // Number of consecutive errors before tripping (default: 3)
+    cooldownMs: 60_000,    // Duration (in milliseconds) to bypass the provider (default: 60s)
+  }
+});
+```
+
+---
+
+## Streaming Caching & Playback
+
+When caching is enabled, Vyrion caches the responses of both `chat()` and `stream()` requests. 
+
+For streaming requests (`stream()`), the full sequence of response chunks is captured on a cache-miss. On a cache-hit, Vyrion plays back the cached stream chunks in order with a simulated **15ms timing delay** per chunk, preserving a smooth, real-time streaming user experience.
+
+Streaming caching is fully transparent:
+
+```typescript
+const ai = new Vyrion({
+  openai: "sk-...",
+  cache: true, // Enables default memory caching for chat and stream
+});
+
+// Cache miss: streams from OpenAI and saves chunks
+for await (const chunk of ai.stream({ message: "Write a poem" })) {
+  process.stdout.write(chunk.delta);
+}
+
+// Cache hit: plays back chunks instantly with smooth simulated 15ms timing
+for await (const chunk of ai.stream({ message: "Write a poem" })) {
+  process.stdout.write(chunk.delta);
+}
+```
+
+---
+
 ## Pricing Overrides
 
 ```typescript
@@ -368,6 +738,15 @@ import type {
   RoutingGoal,
   ModelPricing,
   Message,
+  ICache,
+  Middleware,
+  MiddlewareContext,
+  MiddlewareNext,
+  ToolDefinition,
+  ToolCall,
+  ResponseFormat,
+  MessageContentPart,
+  CircuitBreakerConfig,
 } from "@mincrypt/vyrion";
 ```
 

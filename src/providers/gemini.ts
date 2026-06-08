@@ -1,5 +1,5 @@
 import { BaseProvider } from "./base.js";
-import type { ChatRequest, ChatResponse, StreamChunk, HealthCheckResult, TokenUsage } from "../types/index.js";
+import type { ChatRequest, ChatResponse, StreamChunk, HealthCheckResult, TokenUsage, MessageContentPart } from "../types/index.js";
 
 // ─────────────────────────────────────────────────────────────
 //  Google Gemini Provider Adapter
@@ -42,6 +42,23 @@ export class GeminiProvider extends BaseProvider {
     // Build prompt — Gemini uses a single contents array
     const contents = this.buildGeminiContents(req);
 
+    const tools = req.tools ? [{
+      functionDeclarations: req.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      }))
+    }] : undefined;
+
+    let responseMimeType: string | undefined;
+    let responseSchema: any = undefined;
+    if (req.responseFormat) {
+      responseMimeType = "application/json";
+      if (typeof req.responseFormat !== "string" && req.responseFormat.type === "json_schema") {
+        responseSchema = req.responseFormat.schema;
+      }
+    }
+
     const result = await client.models.generateContent({
       model,
       contents,
@@ -49,6 +66,9 @@ export class GeminiProvider extends BaseProvider {
         maxOutputTokens: req.maxTokens,
         temperature: req.temperature,
         systemInstruction: req.systemPrompt,
+        tools,
+        responseMimeType,
+        responseSchema,
       },
     });
 
@@ -60,6 +80,25 @@ export class GeminiProvider extends BaseProvider {
       total: result.usageMetadata?.totalTokenCount ?? 0,
     };
 
+    const gcalls = result.functionCalls || [];
+    const toolCalls = gcalls.length > 0 ? gcalls.map((fc: any, index: number) => ({
+      id: `call_${fc.name}_${index}`,
+      type: "function" as const,
+      function: {
+        name: fc.name,
+        arguments: JSON.stringify(fc.args),
+      }
+    })) : undefined;
+
+    let json: Record<string, any> | undefined;
+    if (req.responseFormat && text) {
+      try {
+        json = JSON.parse(text);
+      } catch {
+        // Ignore json parse error
+      }
+    }
+
     return {
       content: text,
       provider: this.name,
@@ -68,6 +107,8 @@ export class GeminiProvider extends BaseProvider {
       latency,
       cost: 0,
       finishReason: result.candidates?.[0]?.finishReason ?? "STOP",
+      toolCalls,
+      json,
     };
   }
 
@@ -110,18 +151,61 @@ export class GeminiProvider extends BaseProvider {
     }
   }
 
-  // ── Helpers ─────────────────────────────────────────────
-
-  private buildGeminiContents(req: ChatRequest): Array<{ role: string; parts: Array<{ text: string }> }> {
+  private buildGeminiContents(req: ChatRequest): any[] {
     if (req.messages && req.messages.length > 0) {
       // Filter out system messages (handled via systemInstruction config)
       return req.messages
         .filter((m) => m.role !== "system")
-        .map((m) => ({
-          role: m.role === "assistant" ? "model" : "user",
-          parts: [{ text: m.content }],
-        }));
+        .map((m) => {
+          let parts: any[] = [];
+          if (typeof m.content === "string") {
+            parts = [{ text: m.content }];
+          } else if (Array.isArray(m.content)) {
+            parts = m.content.map(mapGeminiContentPart);
+          }
+          return {
+            role: m.role === "assistant" ? "model" : "user",
+            parts,
+          };
+        });
     }
     return [{ role: "user", parts: [{ text: req.message ?? "" }] }];
   }
+}
+
+function mapGeminiContentPart(part: MessageContentPart): any {
+  if (part.type === "text") {
+    return { text: part.text ?? "" };
+  }
+  if (part.type === "image") {
+    let data = part.image?.url ?? "";
+    let mimeType = part.image?.mimeType ?? "image/jpeg";
+    if (data.includes(";base64,")) {
+      const parts = data.split(";base64,");
+      mimeType = parts[0]?.split(":")[1] || mimeType;
+      data = parts[1] || "";
+    }
+    return {
+      inlineData: {
+        mimeType,
+        data,
+      },
+    };
+  }
+  if (part.type === "file") {
+    let data = part.file?.url ?? "";
+    let mimeType = part.file?.mimeType ?? "application/pdf";
+    if (data.includes(";base64,")) {
+      const parts = data.split(";base64,");
+      mimeType = parts[0]?.split(":")[1] || mimeType;
+      data = parts[1] || "";
+    }
+    return {
+      inlineData: {
+        mimeType,
+        data,
+      },
+    };
+  }
+  return part;
 }

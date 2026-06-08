@@ -4,6 +4,7 @@ import type {
   StreamChunk,
   HealthCheckResult,
   ProviderConfig,
+  MessageContentPart,
 } from "../types/index.js";
 
 // ─────────────────────────────────────────────────────────────
@@ -55,11 +56,11 @@ export abstract class BaseProvider implements IProvider {
   /** Build a normalised message array from a ChatRequest */
   protected buildMessages(
     req: ChatRequest
-  ): Array<{ role: string; content: string }> {
+  ): Array<{ role: string; content: string | MessageContentPart[] }> {
     if (req.messages && req.messages.length > 0) {
       return req.messages;
     }
-    const msgs: Array<{ role: string; content: string }> = [];
+    const msgs: Array<{ role: string; content: string | MessageContentPart[] }> = [];
     if (req.systemPrompt) {
       msgs.push({ role: "system", content: req.systemPrompt });
     }

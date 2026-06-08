@@ -16,7 +16,7 @@ interface OllamaMessage {
 
 interface OllamaResponse {
   model: string;
-  message: { role: string; content: string };
+  message: { role: string; content: string; tool_calls?: any[] };
   done: boolean;
   prompt_eval_count?: number;
   eval_count?: number;
@@ -61,6 +61,20 @@ export class OllamaProvider extends BaseProvider {
     const messages = this.buildMessages(req) as OllamaMessage[];
     const start = Date.now();
 
+    const tools = req.tools?.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    let format: string | undefined;
+    if (req.responseFormat) {
+      format = "json";
+    }
+
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -68,6 +82,8 @@ export class OllamaProvider extends BaseProvider {
         model,
         messages,
         stream: false,
+        tools: tools && tools.length > 0 ? tools : undefined,
+        format,
         options: {
           num_predict: req.maxTokens,
           temperature: req.temperature,
@@ -91,6 +107,24 @@ export class OllamaProvider extends BaseProvider {
       total: promptTokens + completionTokens,
     };
 
+    const toolCalls = data.message.tool_calls?.map((tc: any, index: number) => ({
+      id: tc.id || `call_${tc.function.name}_${index}`,
+      type: "function" as const,
+      function: {
+        name: tc.function.name,
+        arguments: typeof tc.function.arguments === "string" ? tc.function.arguments : JSON.stringify(tc.function.arguments),
+      },
+    }));
+
+    let json: Record<string, any> | undefined;
+    if (req.responseFormat && data.message.content) {
+      try {
+        json = JSON.parse(data.message.content);
+      } catch {
+        // Ignore json parse error
+      }
+    }
+
     return {
       content: data.message.content,
       provider: this.name,
@@ -99,6 +133,8 @@ export class OllamaProvider extends BaseProvider {
       latency,
       cost: 0, // Local model — no cost
       finishReason: data.done ? "stop" : "length",
+      toolCalls,
+      json,
     };
   }
 

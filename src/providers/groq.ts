@@ -43,11 +43,40 @@ export class GroqProvider extends BaseProvider {
     const messages = this.buildMessages(req);
     const start = Date.now();
 
+    const tools = req.tools?.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    let response_format: any;
+    if (req.responseFormat) {
+      if (req.responseFormat === "json") {
+        response_format = { type: "json_object" };
+      } else if (req.responseFormat.type === "json_object") {
+        response_format = { type: "json_object" };
+      } else if (req.responseFormat.type === "json_schema") {
+        response_format = {
+          type: "json_schema",
+          json_schema: {
+            name: "response_schema",
+            schema: req.responseFormat.schema,
+            strict: true,
+          },
+        };
+      }
+    }
+
     const completion = await client.chat.completions.create({
       model,
       messages,
       max_tokens: req.maxTokens,
       temperature: req.temperature,
+      tools: tools && tools.length > 0 ? tools : undefined,
+      response_format,
     });
 
     const latency = Date.now() - start;
@@ -58,6 +87,24 @@ export class GroqProvider extends BaseProvider {
       total: completion.usage?.total_tokens ?? 0,
     };
 
+    const toolCalls = choice?.message?.tool_calls?.map((tc: any) => ({
+      id: tc.id,
+      type: "function" as const,
+      function: {
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      },
+    }));
+
+    let json: Record<string, any> | undefined;
+    if (req.responseFormat && choice?.message?.content) {
+      try {
+        json = JSON.parse(choice.message.content);
+      } catch {
+        // Ignore json parse error
+      }
+    }
+
     return {
       content: choice?.message?.content ?? "",
       provider: this.name,
@@ -66,6 +113,8 @@ export class GroqProvider extends BaseProvider {
       latency,
       cost: 0,
       finishReason: choice?.finish_reason ?? "stop",
+      toolCalls,
+      json,
     };
   }
 

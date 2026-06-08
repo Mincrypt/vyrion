@@ -7,6 +7,7 @@ import type { ChatRequest } from "../types/index.js";
 // ─────────────────────────────────────────────────────────────
 
 // Mock the OpenAI module so no real network calls happen
+// @ts-ignore
 vi.mock("openai", () => {
   return {
     default: vi.fn().mockImplementation(() => ({
